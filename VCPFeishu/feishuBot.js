@@ -1071,8 +1071,8 @@ function buildMarkdownPostRows(text) {
     for (const part of parts) {
         if (!part) continue;
         if (part.startsWith('```')) { rows.push([{ tag: 'md', text: part }]); continue; }
-        // v7a: 工具行(🔧/✅/❌/📋)包成 code 行, 原样保真(09-16 用户要求)
-        const TOOL_LINE_RE = /^\s*(?:⚡|🔧|✅|❌|📋)/; // v10.3: +⚡（即时工具卡行）
+        // v35.2: 工具行不再包 code row(灰底大块难看)——md 文本行直接渲染, 保留emoji视觉锚
+        const TOOL_LINE_RE = /^\s*(?:⚡|🔧|✅|❌|📋)/; // v10.3: +⚡（即时工具卡行）, v35.2: 仅识别不再包code
         // v7b: 管道表格块(|...|连续行)整体转一个 code row——md tag 不渲染表格, 拆行会碎
         const TABLE_LINE_RE = /^\s*\|.*\|\s*$/;
         const lines = part.split('\n');
@@ -1088,8 +1088,9 @@ function buildMarkdownPostRows(text) {
                 rows.push([{ tag: 'md', text: block.join('\n') }]);
                 continue;
             }
+            // v35.2: 工具行直接 md 文本(不包反引号code)——轻量视觉行
             if (TOOL_LINE_RE.test(line)) {
-                rows.push([{ tag: 'md', text: '`' + line.trim() + '`' }]);
+                rows.push([{ tag: 'md', text: line.trim() }]);
                 i++;
                 continue;
             }
@@ -2061,7 +2062,8 @@ async function handleFeishuEvent(rawEvent) {
     const topicSession = ensureFeishuTopic(agent, session);
     appendHistory(topicSession.historyPath, buildUserMessage(session.text, session));
 
-    if (bridgeConfig.streamReply) {
+    // v35.2: "正在思考中…"提示语退役——v35.1蓝色执行中状态卡已承担处理中告知, 文本提示冗余刷屏
+    if (false && bridgeConfig.streamReply) {
         try {
             await sendFeishuText(session.targetId, bridgeConfig.streamHint, { replyToMessageId: session.messageId });
         } catch (err) {
