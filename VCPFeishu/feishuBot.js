@@ -1072,7 +1072,7 @@ function buildMarkdownPostRows(text) {
         if (!part) continue;
         if (part.startsWith('```')) { rows.push([{ tag: 'md', text: part }]); continue; }
         // v35.2: 工具行不再包 code row(灰底大块难看)——md 文本行直接渲染, 保留emoji视觉锚
-        const TOOL_LINE_RE = /^\s*(?:⚡|🔧|✅|❌|📋)/; // v10.3: +⚡（即时工具卡行）, v35.2: 仅识别不再包code
+        const TOOL_LINE_RE = /^\s*(?:⚡|🔧|✅|❌|📋)/u; // v10.3+v35.4: u flag修正surrogate pair匹配
         // v7b: 管道表格块(|...|连续行)整体转一个 code row——md tag 不渲染表格, 拆行会碎
         const TABLE_LINE_RE = /^\s*\|.*\|\s*$/;
         const lines = part.split('\n');
@@ -1088,9 +1088,18 @@ function buildMarkdownPostRows(text) {
                 rows.push([{ tag: 'md', text: block.join('\n') }]);
                 continue;
             }
-            // v35.2: 工具行直接 md 文本(不包反引号code)——轻量视觉行
+            // v35.3: 工具行美化——emoji锚+粗体工具名+参数斜体化(灰感), 比裸文本/灰code块都好看
             if (TOOL_LINE_RE.test(line)) {
-                rows.push([{ tag: 'md', text: line.trim() }]);
+                const m = line.trim().match(/^([⚡🔧✅❌📋])\s+([^·]+?)(?:\s·\s(.+))?$/u); // u flag: emoji是surrogate pair, 无u按单code unit错配
+                let styled;
+                if (m) {
+                    const [_, icon, name, args] = m;
+                    const argsMd = args ? ' · *' + args.replace(/ (\S+=)/g, ' · $1') + '*' : '';
+                    styled = icon + ' **' + name.trim() + '**' + argsMd;
+                } else {
+                    styled = line.trim();
+                }
+                rows.push([{ tag: 'md', text: styled }]);
                 i++;
                 continue;
             }
