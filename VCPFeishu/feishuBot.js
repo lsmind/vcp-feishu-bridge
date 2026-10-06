@@ -1382,7 +1382,7 @@ async function notifyApprovalToFeishu(payload) {
         const targetGroup = cfg.approvalTargetId || cfg.ownerOpenId || null;
         if (!targetGroup) { warn('[审批卡] 未配置 approvalTargetId/ownerOpenId, 跳过飞书审批通知'); return; }
         const card = {
-            config: { wide_screen_mode: true },
+            config: { wide_screen_mode: true, update_multi: true },
             header: { title: { tag: 'plain_text', content: '🔔 工具调用待审批' }, template: 'orange' },
             elements: [
                 { tag: 'div', text: { tag: 'lark_md', content:
@@ -1419,7 +1419,7 @@ function bindApprovalBridge() {
             entry.decision = entry.decision || 'expired';
             persistApprovalDecision(payload.requestId, entry);
             const expiredCard = {
-                config: { wide_screen_mode: true },
+                config: { wide_screen_mode: true, update_multi: true },
                 header: { title: { tag: 'plain_text', content: '🔔 审批已失效(超时)' }, template: 'grey' },
                 elements: [
                     { tag: 'div', text: { tag: 'lark_md', content: `**⏰ 无人审批已超时, 本次工具调用已取消**\n工具: ${payload.toolName}` } },
@@ -1486,7 +1486,7 @@ async function handleApprovalCardAction(data) {
                 const headerTpl = (ok || priorDecision) ? (isApprovedState ? 'green' : 'red')
                     : (known ? 'grey' : 'blue');
                 const updatedCard = {
-                    config: { wide_screen_mode: true },
+                    config: { wide_screen_mode: true, update_multi: true },
                     header: { title: { tag: 'plain_text', content: headerTitle }, template: headerTpl },
                     elements: [
                         { tag: 'div', text: { tag: 'lark_md', content: `**${statusText}**\nrequestId: \`${action.requestId}\`` } },
@@ -1500,6 +1500,24 @@ async function handleApprovalCardAction(data) {
                     body: JSON.stringify({ msg_type: 'interactive', content: JSON.stringify(updatedCard) }),
                 }, FEISHU_HTTP_TIMEOUT_MS, '审批卡终态更新');
                 log('[审批卡] 终态更新 PATCH ' + (resp2.ok ? 'ok' : 'FAIL ' + resp2.status));
+                // v34.8: 终态PATCH后延迟verify——5s后读回卡片内容, 与期望终态不符则告警
+                // (用于捕捉服务端被二次改写的场景, 用户报告过"绿卡闪回橙")
+                if (resp2.ok) {
+                    setTimeout(async () => {
+                        try {
+                            const cfg3 = approvalBridgeConfig || loadBridgeConfig();
+                            const tk = await tenantAccessToken(cfg3);
+                            const vr = await fetchWithTimeout(`https://open.feishu.cn/open-apis/im/v1/messages/${encodeURIComponent(mid)}`,
+                                { headers: { Authorization: 'Bearer ' + tk } }, FEISHU_HTTP_TIMEOUT_MS, '审批卡终态复核');
+                            if (!vr.ok) return;
+                            const vj = await vr.json().catch(() => null);
+                            const raw = vj && vj.data && vj.data.items && vj.data.items[0] && vj.data.items[0].body && vj.data.items[0].body.content;
+                            if (raw && !raw.includes(headerTitle)) {
+                                warn('[审批卡] 终态复核异常: 5s后卡面title=' + String(raw).slice(0, 120));
+                            }
+                        } catch (e3) { /* 复核失败不阻塞 */ }
+                    }, 5000).unref();
+                }
                 // v34.4: 不删映射——保留decision, 重复点击时恢复正确终态
                 if (ok && known) known.msgId = mid;
             } else {
