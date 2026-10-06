@@ -2174,7 +2174,7 @@ async function handleFeishuEvent(rawEvent) {
             if (s.length < 40) return false;
             // v28.2 (10-05): 收尾白名单扩充——T5实锤"读到=[GOLDEN-VALUE-9173]"以]收尾被误判截断,
             // 续踢注入接缝(日志:截断续踢误触发首例)。合法收尾补充: ] ) 英文.!? 省略号 引号" ' 》 加粗** 围栏`
-            return /[。；！？\n\]\)\.\!?…"\u2019》*`]\s*$/.test(s) === false; // 注: 冒号已上移单独判
+            return /[。；！？\n\]\)\.\!?…\"\u2019》）》】」』〉*`]\s*$/.test(s) === false; // v35.9: +全角闭合括号——(2/2)式收尾八案误判根治
         };
         if (looksTruncated(reply)) {
             log(`检测到疑似截断回复（长度 ${reply.length}，无句读收尾），自动续踢一次`);
