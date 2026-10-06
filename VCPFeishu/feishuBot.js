@@ -1250,11 +1250,10 @@ function inflightWatchdogTick() {
         st.reportCount = (st.reportCount || 0) + 1;
         warn(`[监听] 消息处理中已 ${mins}min（第${st.reportCount}次心跳）: ${st.text.slice(0, 40)}`);
         // v10.4: 无超时杀任务——只要在跑就一直等，每10分钟心跳通报一次
-        // v35: 心跳只报一次——首次简短告知"在跑", 之后静默不刷屏
-        if (st.reportCount > 1) { st.since = now; continue; }
-        const msg = `⏳ 「${st.text.slice(0, 24)}…」处理中（${mins}min）——工具活动见 ⚡ 卡；若有审批卡待处理会单独提醒`;
-        sendFeishuText(st.targetId, msg,
-            { replyToMessageId: st.messageId }).catch(e => warn('[监听] 状态卡发送失败:', e.message));
+        // v35.1: 超时不发新消息——原地PATCH状态卡文案(仍在执行, 已Xmin)
+        st.since = now; // 重新计时
+        if (!st.statusCardMsgId) continue;
+        patchStatusCard(st.statusCardMsgId, `⏳ 仍在执行（已 ${mins}min）——工具活动见 ⚡ 卡`).catch(() => {});
     }
 }
 
@@ -1559,11 +1558,53 @@ function markInflight(session) {
     inflight.set(session.targetId, {
         targetId: session.targetId, messageId: session.messageId,
         text: String(session.text || ''), since: Date.now(), reported: false,
+        statusCardMsgId: null,
     });
     startInflightWatchdog();
+    // v35.1: 立即发一张蓝色"执行中"状态卡——完成时PATCH绿/红, 超时原地更新, 不再发文本心跳
+    (async () => {
+        try {
+            const card = {
+                config: { wide_screen_mode: true, update_multi: true },
+                header: { title: { tag: 'plain_text', content: '⏳ 执行中' }, template: 'blue' },
+                elements: [{ tag: 'div', text: { tag: 'lark_md', content: `**正在处理** 「${String(session.text || '').slice(0, 30)}…」\n工具活动实时推 ⚡ 卡；有审批卡待处理会单独提醒` } }],
+            };
+            const r = await sendFeishuText(session.targetId, JSON.stringify(card), { forceInteractive: true, replyToMessageId: session.messageId });
+            const mid = r && r.data && r.data.message_id;
+            const st = inflight.get(session.targetId);
+            if (mid && st) st.statusCardMsgId = mid;
+        } catch (e) { warn('[监听] 执行中状态卡发送失败:', e.message); }
+    })();
 }
 
-function clearInflight(targetId) { inflight.delete(targetId); }
+function clearInflight(targetId, outcome = 'done') {
+    const st = inflight.get(targetId);
+    inflight.delete(targetId);
+    // v35.1: 状态卡终态——绿(完成)/红(出错)
+    if (st && st.statusCardMsgId) {
+        const fin = outcome === 'error'
+            ? { tpl: 'red', title: '❌ 处理出错', body: '处理出错，详情见下方回复' }
+            : { tpl: 'green', title: '✅ 已完成', body: '回复见下方消息' };
+        patchStatusCard(st.statusCardMsgId, fin.body, fin.tpl, fin.title).catch(() => {});
+    }
+}
+
+// v35.1: 状态卡原地PATCH(文案/颜色/标题), 复用tenantAccessToken
+async function patchStatusCard(mid, bodyText, tpl = 'blue', title = '⏳ 执行中') {
+    const cfg = loadBridgeConfig();
+    const token = await tenantAccessToken(cfg);
+    const card = {
+        config: { wide_screen_mode: true, update_multi: true },
+        header: { title: { tag: 'plain_text', content: title }, template: tpl },
+        elements: [{ tag: 'div', text: { tag: 'lark_md', content: `**${bodyText}**` } }],
+    };
+    const r = await fetchWithTimeout(`https://open.feishu.cn/open-apis/im/v1/messages/${encodeURIComponent(mid)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json; charset=utf-8', Authorization: 'Bearer ' + token },
+        body: JSON.stringify({ msg_type: 'interactive', content: JSON.stringify(card) }),
+    }, FEISHU_HTTP_TIMEOUT_MS, '状态卡更新');
+    return r.ok;
+}
 
 // 启动自检：进程重启会杀在途回复——把悬空消息显式报告出来
 function reportOrphanedInflight() {
@@ -2199,7 +2240,7 @@ topicSession.lastRawReply = stripThoughtChains(stripOrphanBlocks(normalizeProtoc
             }
         }
         stats.messagesProcessed++;
-        clearInflight(session.targetId); // v10.2 状态监听
+        clearInflight(session.targetId, 'done'); // v10.2 状态监听
         log(`回复已发送: target=${session.targetId} topic=${topicSession.topic.id} length=${reply.length} 投递版=${(display || '').length}`);
     } catch (err) {
         stats.messagesFailed++;
@@ -2208,7 +2249,7 @@ topicSession.lastRawReply = stripThoughtChains(stripOrphanBlocks(normalizeProtoc
         try {
             await sendFeishuText(session.targetId, `抱歉，处理出错：${err.message}`, { replyToMessageId: session.messageId });
         } catch (_) {}
-        clearInflight(session.targetId); // v10.2 出错也算闭环
+        clearInflight(session.targetId, 'error'); // v10.2 出错也算闭环
     }
 }
 
