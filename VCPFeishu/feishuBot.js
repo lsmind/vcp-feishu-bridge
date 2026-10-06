@@ -1401,6 +1401,8 @@ async function notifyApprovalToFeishu(payload) {
                       value: { kind: 'vcp_approval', requestId: payload.requestId, approved: 'true' } },
                     { tag: 'button', text: { tag: 'plain_text', content: '❌ 拒绝' }, type: 'danger',
                       value: { kind: 'vcp_approval', requestId: payload.requestId, approved: 'false' } },
+                    { tag: 'button', text: { tag: 'plain_text', content: '✅✔ 批准并加白' }, type: 'default',
+                      value: { kind: 'vcp_approval', requestId: payload.requestId, approved: 'true', whitelistCommand: 'true' } },
                 ] },
             ],
         };
@@ -1408,7 +1410,7 @@ async function notifyApprovalToFeishu(payload) {
         const sentMsgId = sendResult && sendResult.data && sendResult.data.message_id || null;
         // 登记requestId→{msgId, decision:null}, 供超时PATCH灰卡/重复点击定位卡片
         if (sentMsgId) {
-            approvalCardMsgIds.set(payload.requestId, { msgId: sentMsgId, decision: null });
+            approvalCardMsgIds.set(payload.requestId, { msgId: sentMsgId, decision: null, toolName: payload.toolName, args: payload.args || {} });
             persistApprovalDecision(payload.requestId, { msgId: sentMsgId, decision: null });
         }
         log('[审批卡] 已发送: ' + payload.toolName + ' requestId=' + payload.requestId + (sentMsgId ? ' msgId=' + sentMsgId : ' (无msgId)'));
@@ -1462,6 +1464,26 @@ async function handleApprovalCardAction(data) {
         const r = await resp.json().catch(() => ({}));
         log('[审批卡] 按钮回调: requestId=' + action.requestId + ' approved=' + approved + ' -> ' + JSON.stringify(r));
         const ok = resp.ok && r && r.ok;
+        // v35.6: "批准并加白"——按命令首词(不含参数)加白名单, 同首词命令此后免审
+        if (ok && approved && String(action.whitelistCommand) === 'true') {
+            try {
+                const info = approvalCardMsgIds.get(action.requestId) || {};
+                const cmd = String((info.args && info.args.command) || '');
+                const firstWord = cmd.trim().split(/\s+/)[0];
+                if (firstWord && !/[;&|`$(){}<>]/.test(firstWord)) {
+                    const rule = (info.toolName || 'LinuxShellExecutor') + ':command:[' + firstWord + ' *]'; // 参数级glob: 只匹配首词, 参数任意
+                    const cfgPath = require('path').join(__dirname, '..', '..', 'toolApprovalConfig.json');
+                    const fs = require('fs');
+                    const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+                    if (!Array.isArray(cfg.whitelist)) cfg.whitelist = [];
+                    if (!cfg.whitelist.includes(rule)) {
+                        cfg.whitelist.push(rule);
+                        fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2));
+                        log('[审批卡] 已加白名单: ' + rule + ' (watcher自动热载)');
+                    }
+                } else warn('[审批卡] 加白失败: 命令首词为空或含元字符: ' + firstWord);
+            } catch (e) { warn('[审批卡] 加白名单失败:', e.message); }
+        }
         // v34.4: 记录最终决定; 重复点击(非ok)时查历史决定恢复正确终态
         // v34.5: 内存无记录时从落盘历史加载(进程重启后仍可恢复旧卡终态)
         if (!approvalCardMsgIds.has(action.requestId)) loadApprovalDecisions();
@@ -1507,7 +1529,8 @@ async function handleApprovalCardAction(data) {
                     headers: { 'Content-Type': 'application/json; charset=utf-8', Authorization: 'Bearer ' + token },
                     body: JSON.stringify({ msg_type: 'interactive', content: JSON.stringify(updatedCard) }),
                 }, FEISHU_HTTP_TIMEOUT_MS, '审批卡终态更新');
-                log('[审批卡] 终态更新 PATCH ' + (resp2.ok ? 'ok' : 'FAIL ' + resp2.status));
+                const pj = await resp2.json().catch(() => null);
+                log('[审批卡] 终态更新 PATCH http=' + resp2.status + ' biz=' + (pj ? (pj.code + ' ' + pj.msg) : 'body不可解析') + ' mid=' + mid.slice(-12));
                 // v34.8: 终态PATCH后延迟verify——5s后读回卡片内容, 与期望终态不符则告警
                 // (用于捕捉服务端被二次改写的场景, 用户报告过"绿卡闪回橙")
                 if (resp2.ok) {
