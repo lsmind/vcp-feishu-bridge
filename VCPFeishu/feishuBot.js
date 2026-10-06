@@ -1250,12 +1250,11 @@ function inflightWatchdogTick() {
         st.reportCount = (st.reportCount || 0) + 1;
         warn(`[监听] 消息处理中已 ${mins}min（第${st.reportCount}次心跳）: ${st.text.slice(0, 40)}`);
         // v10.4: 无超时杀任务——只要在跑就一直等，每10分钟心跳通报一次
-        const msg = st.reportCount === 1
-            ? `⏱️ [状态] 你 ${mins} 分钟前的消息（"${st.text.slice(0, 30)}…"）仍在处理中。已取消自动超时——只要还在跑就一直等，工具活动会实时以 ⚡ 卡推送。若确认死掉，重发一次即可（原消息已进历史，不会丢）。`
-            : `⏱️ [状态] 仍在处理，累计约 ${mins} 分钟（第 ${st.reportCount} 次心跳）。继续等待中；需要放弃就重发。`;
+        // v35: 心跳只报一次——首次简短告知"在跑", 之后静默不刷屏
+        if (st.reportCount > 1) { st.since = now; continue; }
+        const msg = `⏳ 「${st.text.slice(0, 24)}…」处理中（${mins}min）——工具活动见 ⚡ 卡；若有审批卡待处理会单独提醒`;
         sendFeishuText(st.targetId, msg,
             { replyToMessageId: st.messageId }).catch(e => warn('[监听] 状态卡发送失败:', e.message));
-        st.since = now; // 重新计时：再过 inflightTimeoutMs 仍无回复才通报下一次
     }
 }
 
