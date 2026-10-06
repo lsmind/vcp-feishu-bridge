@@ -1,0 +1,33 @@
+{
+  "enabled": true,
+  "timeoutMinutes": 5,
+  "approveAll": false,
+  "fuzzyToolMatching": true,
+  "privacyProtection": {
+    "enabled": false
+  },
+  "approvalList": [
+    "LinuxShellExecutor",
+    "PowerShellExecutor",
+    "ServerPowerShellExecutor"
+  ],
+  "debugMode": true,
+  "whitelist": [
+    "LinuxShellExecutor:command:[date*]",
+    "LinuxShellExecutor:command:[echo*]",
+    "LinuxShellExecutor:command:[ls*]",
+    "LinuxShellExecutor:command:[cat /proc/*]",
+    "LinuxShellExecutor:command:[cat /etc/os-release*]",
+    "LinuxShellExecutor:command:[df*]",
+    "LinuxShellExecutor:command:[uptime*]",
+    "LinuxShellExecutor:command:[free*]",
+    "LinuxShellExecutor:command:[pwd*]",
+    "LinuxShellExecutor:command:[which*]",
+    "LinuxShellExecutor:command:[whoami*]",
+    "LinuxShellExecutor:command:[git status*]",
+    "LinuxShellExecutor:command:[git log*]",
+    "LinuxShellExecutor:command:[git diff*]",
+    "LinuxShellExecutor:command:[node --version*]",
+    "LinuxShellExecutor:command:[python3 --version*]"
+  ]
+}
