@@ -1522,6 +1522,10 @@ async function handleApprovalCardAction(data) {
                         { tag: 'div', text: { tag: 'lark_md', content: `**${statusText}**\nrequestId: \`${action.requestId}\`` } },
                     ],
                 };
+                // v35.8: 终态PATCH延迟1.5s——实测按钮回调瞬间PATCH会被飞书静默丢弃
+                // (biz=0成功但内容不写入, 三次MISMATCH实锤; 延迟后同请求立即生效)。
+                // 推测卡片按钮交互存在服务端短窗口锁。延迟绕开。
+                setTimeout(async () => { try {
                 const cfg = approvalBridgeConfig || loadBridgeConfig();
                 const token = await tenantAccessToken(cfg);
                 const resp2 = await fetchWithTimeout(`https://open.feishu.cn/open-apis/im/v1/messages/${encodeURIComponent(mid)}`, {
@@ -1531,6 +1535,19 @@ async function handleApprovalCardAction(data) {
                 }, FEISHU_HTTP_TIMEOUT_MS, '审批卡终态更新');
                 const pj = await resp2.json().catch(() => null);
                 log('[审批卡] 终态更新 PATCH http=' + resp2.status + ' biz=' + (pj ? (pj.code + ' ' + pj.msg) : 'body不可解析') + ' mid=' + mid.slice(-12));
+                // v35.7: PATCH后2s读回验证——内容没写入立即报红(抓"biz=0但没生效"现行)
+                if (pj && pj.code === 0) {
+                    setTimeout(async () => {
+                        try {
+                            const tk2 = await tenantAccessToken(approvalBridgeConfig || loadBridgeConfig());
+                            const gr = await fetchWithTimeout(`https://open.feishu.cn/open-apis/im/v1/messages/${encodeURIComponent(mid)}`,
+                                { headers: { Authorization: 'Bearer ' + tk2 } }, FEISHU_HTTP_TIMEOUT_MS, '审批卡回读');
+                            const gj = await gr.json().catch(() => null);
+                            const graw = gj && gj.data && gj.data.items && gj.data.items[0] && gj.data.items[0].body && gj.data.items[0].body.content || '';
+                            log('[审批卡] 回读验证: ' + (graw.includes(headerTitle) ? 'OK 已写入' : 'MISMATCH 未写入! 卡面=' + String(graw).slice(0, 100)));
+                        } catch (e4) { warn('[审批卡] 回读验证失败:', e4.message); }
+                    }, 2000).unref();
+                }
                 // v34.8: 终态PATCH后延迟verify——5s后读回卡片内容, 与期望终态不符则告警
                 // (用于捕捉服务端被二次改写的场景, 用户报告过"绿卡闪回橙")
                 if (resp2.ok) {
@@ -1549,6 +1566,7 @@ async function handleApprovalCardAction(data) {
                         } catch (e3) { /* 复核失败不阻塞 */ }
                     }, 5000).unref();
                 }
+                } catch (pe) { warn('[审批卡] 延迟终态PATCH失败:', pe.message); } }, 1500).unref();
                 // v34.4: 不删映射——保留decision, 重复点击时恢复正确终态
                 if (ok && known) known.msgId = mid;
             } else {
