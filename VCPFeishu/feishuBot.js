@@ -1387,8 +1387,20 @@ function persistApprovalDecision(requestId, info) {
 async function notifyApprovalToFeishu(payload) {
     try {
         const cfg = approvalBridgeConfig || (approvalBridgeConfig = loadBridgeConfig());
-        const targetGroup = cfg.approvalTargetId || cfg.ownerOpenId || null;
+        // v37: 审批卡发到触发审批的当前会话(inflight最近活跃chatId), 而非固定私聊。
+        // 审批请求总在某个agent轮内触发——该轮的会话就是用户正在看的地方。
+        // FeishuApprovalTargetId 降级为兜底(无人值守定时任务等无inflight场景)。
+        let targetGroup = null;
+        try {
+            let newest = null;
+            for (const [cid, st] of inflight) {
+                if (!newest || st.since > newest.since) newest = st;
+            }
+            if (newest && newest.targetId && String(newest.targetId).startsWith('oc_')) targetGroup = newest.targetId;
+        } catch (_) {}
+        if (!targetGroup) targetGroup = cfg.approvalTargetId || cfg.ownerOpenId || null;
         if (!targetGroup) { warn('[审批卡] 未配置 approvalTargetId/ownerOpenId, 跳过飞书审批通知'); return; }
+        log('[审批卡] 目标会话: ' + (String(targetGroup).slice(0, 12) + '…') + (targetGroup === cfg.approvalTargetId ? ' (兜底)' : ' (当前会话)'));
         const card = {
             config: { wide_screen_mode: true, update_multi: true },
             header: { title: { tag: 'plain_text', content: '🔔 工具调用待审批' }, template: 'orange' },
@@ -1522,9 +1534,8 @@ async function handleApprovalCardAction(data) {
                         { tag: 'div', text: { tag: 'lark_md', content: `**${statusText}**\nrequestId: \`${action.requestId}\`` } },
                     ],
                 };
-                // v35.8: 终态PATCH延迟1.5s——实测按钮回调瞬间PATCH会被飞书静默丢弃
-                // (biz=0成功但内容不写入, 三次MISMATCH实锤; 延迟后同请求立即生效)。
-                // 推测卡片按钮交互存在服务端短窗口锁。延迟绕开。
+                // v37: 终态PATCH延迟800ms(v35.8为1.5s, 用户反馈偏长; 飞书交互锁窗口
+                // 实测<1s, 800ms兼顾安全与响应)
                 setTimeout(async () => { try {
                 const cfg = approvalBridgeConfig || loadBridgeConfig();
                 const token = await tenantAccessToken(cfg);
@@ -1566,7 +1577,7 @@ async function handleApprovalCardAction(data) {
                         } catch (e3) { /* 复核失败不阻塞 */ }
                     }, 5000).unref();
                 }
-                } catch (pe) { warn('[审批卡] 延迟终态PATCH失败:', pe.message); } }, 1500).unref();
+                } catch (pe) { warn('[审批卡] 延迟终态PATCH失败:', pe.message); } }, 800).unref();
                 // v34.4: 不删映射——保留decision, 重复点击时恢复正确终态
                 if (ok && known) known.msgId = mid;
             } else {
